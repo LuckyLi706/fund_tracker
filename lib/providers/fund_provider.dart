@@ -2,10 +2,13 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import '../models/fund_model.dart';
 import '../services/fund_service.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class FundProvider with ChangeNotifier {
   final FundService _service = FundService();
-  final List<String> _codes = ['161725', '000001'];
+  List<String> _codes = [];
+  static const String _storageKey = 'tracked_fund_codes';
+  static const String _sourceKey = 'data_source_index';
   Map<String, FundEstimate> _estimates = {};
   bool _isLoading = false;
   Timer? _timer;
@@ -14,19 +17,43 @@ class FundProvider with ChangeNotifier {
   FundDataSource _currentSource = FundDataSource.tiantian;
 
   FundProvider() {
+    _init();
+  }
+
+  Future<void> _init() async {
+    await _loadFromPrefs();
     refreshAll();
     _timer = Timer.periodic(const Duration(seconds: 10), (timer) {
       refreshAll();
     });
   }
 
+  Future<void> _loadFromPrefs() async {
+    final prefs = await SharedPreferences.getInstance();
+    _codes = prefs.getStringList(_storageKey) ?? [];
+    
+    final sourceIndex = prefs.getInt(_sourceKey) ?? 0;
+    if (sourceIndex < FundDataSource.values.length) {
+      _currentSource = FundDataSource.values[sourceIndex];
+    }
+    
+    notifyListeners();
+  }
+
+  Future<void> _saveToPrefs() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(_storageKey, _codes);
+    await prefs.setInt(_sourceKey, _currentSource.index);
+  }
+
   List<FundEstimate> get funds => _estimates.values.toList();
   bool get isLoading => _isLoading;
   FundDataSource get currentSource => _currentSource;
 
-  void setDataSource(FundDataSource source) {
+  void setDataSource(FundDataSource source) async {
     if (_currentSource != source) {
       _currentSource = source;
+      await _saveToPrefs();
       refreshAll();
       notifyListeners();
     }
@@ -51,6 +78,7 @@ class FundProvider with ChangeNotifier {
   void addFund(String code) async {
     if (!_codes.contains(code)) {
       _codes.add(code);
+      await _saveToPrefs();
       final estimate = await _service.fetchEstimate(code, _currentSource);
       if (estimate != null) {
         _estimates[code] = estimate;
@@ -59,9 +87,10 @@ class FundProvider with ChangeNotifier {
     }
   }
 
-  void removeFund(String code) {
+  void removeFund(String code) async {
     _codes.remove(code);
     _estimates.remove(code);
+    await _saveToPrefs();
     notifyListeners();
   }
 
