@@ -1,16 +1,30 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:flutter_slidable/flutter_slidable.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'providers/fund_provider.dart';
 import 'models/fund_model.dart';
 
-void main() {
-  runApp(
-    ChangeNotifierProvider(
-      create: (_) => FundProvider(),
-      child: const FundApp(),
-    ),
-  );
+void main() async {
+  try {
+    WidgetsFlutterBinding.ensureInitialized();
+    final prefs = await SharedPreferences.getInstance();
+    
+    runApp(
+      ChangeNotifierProvider(
+        create: (_) => FundProvider(prefs: prefs),
+        child: const FundApp(),
+      ),
+    );
+  } catch (e) {
+    debugPrint('Error during startup: $e');
+    runApp(
+      ChangeNotifierProvider(
+        create: (_) => FundProvider(),
+        child: const FundApp(),
+      ),
+    );
+  }
 }
 
 class FundApp extends StatelessWidget {
@@ -67,30 +81,32 @@ class HomePage extends StatelessWidget {
       ),
       body: Consumer<FundProvider>(
         builder: (context, provider, child) {
-          if (provider.isLoading && provider.funds.isEmpty) {
+          final codes = provider.codes;
+          if (provider.isLoading && codes.isEmpty) {
             return const Center(child: CircularProgressIndicator());
           }
-          if (provider.funds.isEmpty) {
+          if (codes.isEmpty) {
             return const Center(child: Text('暂无基金，请点击下方添加'));
           }
           return ListView.builder(
             padding: const EdgeInsets.all(16),
-            itemCount: provider.funds.length,
+            itemCount: codes.length,
             itemBuilder: (context, index) {
-              final fund = provider.funds[index];
+              final code = codes[index];
+              final estimate = provider.getEstimate(code);
               return Padding(
                 padding: const EdgeInsets.only(bottom: 16),
                 child: Slidable(
-                  key: Key(fund.fundCode),
+                  key: Key(code),
                   endActionPane: ActionPane(
                     motion: const ScrollMotion(),
                     extentRatio: 0.25,
                     children: [
                       SlidableAction(
                         onPressed: (context) {
-                          provider.removeFund(fund.fundCode);
+                          provider.removeFund(code);
                           ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(content: Text('${fund.name} 已移除')),
+                            SnackBar(content: Text('代码 $code 已移除')),
                           );
                         },
                         backgroundColor: Colors.redAccent,
@@ -104,7 +120,11 @@ class HomePage extends StatelessWidget {
                       ),
                     ],
                   ),
-                  child: FundCard(fund: fund, noBottomMargin: true),
+                  child: FundCard(
+                    fund: estimate, 
+                    fundCode: code,
+                    noBottomMargin: true
+                  ),
                 ),
               );
             },
@@ -137,7 +157,16 @@ class HomePage extends StatelessWidget {
           ElevatedButton(
             onPressed: () {
               if (controller.text.isNotEmpty) {
-                context.read<FundProvider>().addFund(controller.text);
+                final code = controller.text;
+                context.read<FundProvider>().addFund(code, onResult: (success) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text(success ? '基金 $code 已成功保存到本地' : '基金 $code 添加成功，但本地存储失败'),
+                      backgroundColor: success ? Colors.green : Colors.orange,
+                      duration: const Duration(seconds: 2),
+                    ),
+                  );
+                });
                 Navigator.pop(context);
               }
             },
@@ -190,6 +219,37 @@ class SettingsPage extends StatelessWidget {
           const Padding(
             padding: EdgeInsets.all(16.0),
             child: Text(
+              '系统状态',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.indigo),
+            ),
+          ),
+          Consumer<FundProvider>(
+            builder: (context, provider, child) {
+              return ListTile(
+                title: const Text('本地存储状态'),
+                subtitle: Text(provider.isStorageReady ? '已就绪 (数据将持久化保存)' : '未就绪 (点击尝试重新连接存储)'),
+                trailing: Icon(
+                  provider.isStorageReady ? Icons.check_circle : Icons.error,
+                  color: provider.isStorageReady ? Colors.green : Colors.red,
+                ),
+                onTap: provider.isStorageReady ? null : () async {
+                  await provider.reconnectStorage();
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text(provider.isStorageReady 
+                        ? '存储连接成功' 
+                        : '连接失败: ${provider.lastStorageError ?? "原因未知"}'),
+                      backgroundColor: provider.isStorageReady ? Colors.green : Colors.red,
+                    ),
+                  );
+                },
+              );
+            },
+          ),
+          const Divider(),
+          const Padding(
+            padding: EdgeInsets.all(16.0),
+            child: Text(
               '关于',
               style: TextStyle(fontSize: 14, color: Colors.grey),
             ),
@@ -205,16 +265,45 @@ class SettingsPage extends StatelessWidget {
 }
 
 class FundCard extends StatelessWidget {
-  final FundEstimate fund;
+  final FundEstimate? fund;
+  final String fundCode;
   final bool noBottomMargin;
 
-  const FundCard({super.key, required this.fund, this.noBottomMargin = false});
+  const FundCard({
+    super.key, 
+    this.fund, 
+    required this.fundCode,
+    this.noBottomMargin = false
+  });
 
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final color = fund.isUp ? Colors.redAccent : Colors.greenAccent;
-    final prefix = fund.isUp ? '+' : '';
+    
+    if (fund == null) {
+      return Card(
+        margin: noBottomMargin ? EdgeInsets.zero : const EdgeInsets.only(bottom: 16),
+        elevation: 2,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        child: Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: Row(
+            children: [
+              const SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+              const SizedBox(width: 16),
+              Text('正在加载基金 $fundCode...', style: const TextStyle(color: Colors.grey)),
+            ],
+          ),
+        ),
+      );
+    }
+
+    final color = fund!.isUp ? Colors.redAccent : Colors.greenAccent;
+    final prefix = fund!.isUp ? '+' : '';
 
     return Card(
       margin: noBottomMargin ? EdgeInsets.zero : const EdgeInsets.only(bottom: 16),
@@ -232,13 +321,33 @@ class FundCard extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        fund.name,
-                        style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                        overflow: TextOverflow.ellipsis,
+                      Row(
+                        children: [
+                          Flexible(
+                            child: Text(
+                              fund!.name,
+                              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          if (fund!.isOfficial)
+                            Container(
+                              margin: const EdgeInsets.only(left: 8),
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: Colors.blue.withOpacity(0.1),
+                                borderRadius: BorderRadius.circular(4),
+                                border: Border.all(color: Colors.blue.withOpacity(0.5)),
+                              ),
+                              child: const Text(
+                                '官方净值',
+                                style: TextStyle(fontSize: 10, color: Colors.blue, fontWeight: FontWeight.bold),
+                              ),
+                            ),
+                        ],
                       ),
                       Text(
-                        '代码: ${fund.fundCode}',
+                        '代码: ${fund!.fundCode}',
                         style: TextStyle(
                           color: isDark ? Colors.grey[400] : Colors.grey[600],
                           fontSize: 14,
@@ -248,7 +357,7 @@ class FundCard extends StatelessWidget {
                   ),
                 ),
                 Text(
-                  '$prefix${fund.gszzl}%',
+                  '$prefix${fund!.displayChangePercent}%',
                   style: TextStyle(
                     fontSize: 24,
                     fontWeight: FontWeight.bold,
@@ -265,14 +374,14 @@ class FundCard extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      '估算净值',
+                      fund!.isOfficial ? '官方净值' : '估算净值',
                       style: TextStyle(
                         fontSize: 12,
                         color: isDark ? Colors.grey[400] : Colors.grey[600],
                       ),
                     ),
                     Text(
-                      fund.gsz,
+                      fund!.dwjz,
                       style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
                     ),
                   ],
@@ -281,14 +390,14 @@ class FundCard extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.end,
                   children: [
                     Text(
-                      '更新时间',
+                      fund!.isOfficial ? '净值日期' : '更新时间',
                       style: TextStyle(
                         fontSize: 12,
                         color: isDark ? Colors.grey[400] : Colors.grey[600],
                       ),
                     ),
                     Text(
-                      fund.gztime,
+                      fund!.isOfficial ? fund!.jzrq : fund!.gztime,
                       style: const TextStyle(fontSize: 14),
                     ),
                   ],
