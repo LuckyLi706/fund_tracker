@@ -35,6 +35,7 @@ class FundApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: '基金估算',
+      debugShowCheckedModeBanner: false,
       themeMode: ThemeMode.system,
       theme: ThemeData(
         useMaterial3: true,
@@ -51,7 +52,6 @@ class FundApp extends StatelessWidget {
         ),
       ),
       home: const HomePage(),
-      debugShowCheckedModeBanner: false,
     );
   }
 }
