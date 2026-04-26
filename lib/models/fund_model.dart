@@ -1,6 +1,8 @@
 enum FundDataSource {
   tiantian('天天基金', 'fundgz.1234567.com.cn'),
-  sina('新浪财经', 'hq.sinajs.cn');
+  sina('新浪财经', 'hq.sinajs.cn'),
+  tencent('腾讯财经', 'qt.gtimg.cn'),
+  xueqiu('雪球', 'stock.xueqiu.com');
 
   final String label;
   final String domain;
@@ -75,4 +77,24 @@ class FundEstimate {
   }
 
   bool get isUp => displayChangePercent >= 0;
+}
+
+class FundHistoryItem {
+  final String date;
+  final double dwjz; // 单位净值
+  final double lzzl; // 累计净值增长率 (or daily change rate)
+
+  FundHistoryItem({
+    required this.date,
+    required this.dwjz,
+    required this.lzzl,
+  });
+
+  factory FundHistoryItem.fromJson(Map<String, dynamic> json) {
+    return FundHistoryItem(
+      date: json['FSRQ'] ?? '',
+      dwjz: double.tryParse(json['DWJZ']?.toString() ?? '0') ?? 0.0,
+      lzzl: double.tryParse(json['JZZZL']?.toString() ?? '0') ?? 0.0,
+    );
+  }
 }

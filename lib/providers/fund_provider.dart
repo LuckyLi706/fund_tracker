@@ -142,17 +142,50 @@ class FundProvider with ChangeNotifier {
     }
   }
 
-  void addFund(String code, {Function(bool)? onResult}) async {
+  void addFund(String code, {Function(bool success, String message)? onResult}) async {
     final cleanCode = code.trim();
     if (cleanCode.isEmpty) return;
     
-    if (!_codes.contains(cleanCode)) {
-      _codes.add(cleanCode);
-      notifyListeners(); 
-      final success = await _saveToPrefs();
-      if (onResult != null) onResult(success);
+    if (_codes.contains(cleanCode)) {
+      if (onResult != null) onResult(false, '该基金已在追踪列表中');
+      return;
+    }
+
+    // 显示加载状态
+    try {
+      // 1. 尝试获取数据验证代码有效性
+      // 优先使用当前选中的源，如果失败，则使用最稳定的“天天基金”作为兜底验证
+      FundEstimate? estimate = await _service.fetchEstimate(cleanCode, _currentSource)
+          .timeout(const Duration(seconds: 5));
       
-      _fetchSingleEstimate(cleanCode);
+      if (estimate == null || estimate.name.isEmpty) {
+        // 如果当前源验证失败，尝试用天天基金兜底验证一次
+        if (_currentSource != FundDataSource.tiantian) {
+          estimate = await _service.fetchEstimate(cleanCode, FundDataSource.tiantian)
+              .timeout(const Duration(seconds: 5));
+        }
+      }
+      
+      if (estimate == null || estimate.name.isEmpty) {
+        if (onResult != null) onResult(false, '无法验证基金代码，各数据源均无响应');
+        return;
+      }
+
+      // 2. 验证成功，添加到列表
+      _codes.add(cleanCode);
+      _estimates[cleanCode] = estimate; // 即使是兜底抓到的，也先存下来展示
+      notifyListeners(); 
+      
+      // 3. 持久化存储
+      final storageSuccess = await _saveToPrefs();
+      if (onResult != null) {
+        onResult(storageSuccess, storageSuccess ? '基金 $cleanCode 添加成功' : '基金添加成功，但本地存储失败');
+      }
+    } catch (e) {
+      debugPrint('Add Fund Error: $e');
+      if (onResult != null) {
+        onResult(false, '获取数据超时或发生错误，请重试');
+      }
     }
   }
 

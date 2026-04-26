@@ -4,6 +4,7 @@ import 'package:flutter_slidable/flutter_slidable.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'providers/fund_provider.dart';
 import 'models/fund_model.dart';
+import 'pages/fund_detail_page.dart';
 
 void main() async {
   try {
@@ -120,10 +121,24 @@ class HomePage extends StatelessWidget {
                       ),
                     ],
                   ),
-                  child: FundCard(
-                    fund: estimate, 
-                    fundCode: code,
-                    noBottomMargin: true
+                  child: InkWell(
+                    onTap: estimate != null ? () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) => FundDetailPage(
+                            fundCode: code,
+                            fundName: estimate.name,
+                          ),
+                        ),
+                      );
+                    } : null,
+                    borderRadius: BorderRadius.circular(16),
+                    child: FundCard(
+                      fund: estimate, 
+                      fundCode: code,
+                      noBottomMargin: true
+                    ),
                   ),
                 ),
               );
@@ -158,11 +173,11 @@ class HomePage extends StatelessWidget {
             onPressed: () {
               if (controller.text.isNotEmpty) {
                 final code = controller.text;
-                context.read<FundProvider>().addFund(code, onResult: (success) {
+                context.read<FundProvider>().addFund(code, onResult: (success, message) {
                   ScaffoldMessenger.of(context).showSnackBar(
                     SnackBar(
-                      content: Text(success ? '基金 $code 已成功保存到本地' : '基金 $code 添加成功，但本地存储失败'),
-                      backgroundColor: success ? Colors.green : Colors.orange,
+                      content: Text(message),
+                      backgroundColor: success ? Colors.green : Colors.redAccent,
                       duration: const Duration(seconds: 2),
                     ),
                   );

@@ -13,6 +13,8 @@ dependencies:
   flutter_slidable: ^3.1.1
   cupertino_icons: ^1.0.6
   shared_preferences: ^2.2.2
+  fl_chart: ^0.66.0
+  fast_gbk: ^1.0.0
 
 dev_dependencies:
   flutter_test:
