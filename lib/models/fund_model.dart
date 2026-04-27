@@ -46,33 +46,63 @@ class FundEstimate {
 
   // 判定是否为官方净值
   bool get isOfficial {
-    if (lzzl != null) return true; // 如果有官方涨跌幅，必然是官方数据
+    final now = DateTime.now();
+    
+    // 1. 如果是周末，通常显示官方确认的周五净值
+    if (now.weekday == DateTime.saturday || now.weekday == DateTime.sunday) {
+      return true;
+    }
 
+    // 2. 检查是否在 9:30 - 15:00 的交易/估值窗口内
+    // 在这个窗口内，如果估算数据存在，我们认为它不是“官方最终净值”
+    final minutes = now.hour * 60 + now.minute;
+    final isValuationWindow = minutes >= 570 && minutes <= 900; // 9:30 - 15:00
+
+    if (isValuationWindow && gsz.isNotEmpty) {
+      // 在估值窗口内且有估算值，则不视为官方模式
+      return false;
+    }
+
+    // 3. 15:00 之后或 9:30 之前的逻辑
+    if (gztime.isEmpty) return true;
+    
     try {
-      // 提取日期部分进行比较 (格式通常为 yyyy-MM-dd)
       final gzDateStr = gztime.contains(' ') ? gztime.split(' ')[0] : gztime;
+      
+      // 如果估值日期和净值日期一致，说明官方已经同步了该日数据
+      if (gzDateStr == jzrq) return true;
+
       final gzDate = DateTime.parse(gzDateStr);
       final jzDate = DateTime.parse(jzrq);
       
-      // 1. 如果估值日期不晚于净值日期，说明显示的是确认值
-      if (!gzDate.isAfter(jzDate)) return true;
-
-      // 2. 特殊处理周末：如果今天是周六/周日，且净值日期是周五或更晚，说明官方已更新
-      final now = DateTime.now();
-      if (now.weekday == DateTime.saturday || now.weekday == DateTime.sunday) {
-        final diff = now.difference(jzDate).inDays;
-        if (diff <= 2) return true; // 周五的净值在周六显示为 official
-      }
+      // 如果估值日期早于净值日期，说明当前是旧数据
+      if (gzDate.isBefore(jzDate)) return true;
     } catch (_) {
-      // 解析失败时回退到简单的字符串包含判断
       if (gztime.contains(jzrq)) return true;
     }
     
+    // 默认：如果不在窗口内且日期不匹配，视情况而定
+    // 但如果已经过了 15:00 且 jzrq 还没更新，由于 isValuationWindow 为 false，
+    // 这里会继续往下走。如果 gzDateStr != jzrq，则返回 false（显示估算值直到真实值出现）
     return false;
   }
 
+  String get displayNetValue {
+    // 严格遵循逻辑：官方模式显示 dwjz，估算模式显示 gsz
+    if (isOfficial) {
+      return dwjz.isNotEmpty ? dwjz : gsz;
+    } else {
+      return gsz.isNotEmpty ? gsz : dwjz;
+    }
+  }
+
+  String get displayTime {
+    return isOfficial ? jzrq : gztime;
+  }
+
   double get displayChangePercent {
-    final val = (isOfficial && lzzl != null) ? lzzl : gszzl;
+    // 官方模式使用官方涨跌幅 (lzzl)，估算模式使用估算涨跌幅 (gszzl)
+    final val = isOfficial ? (lzzl ?? gszzl) : (gszzl ?? lzzl);
     return double.tryParse(val ?? '0') ?? 0.0;
   }
 

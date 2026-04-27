@@ -155,9 +155,11 @@ class HomePage extends StatelessWidget {
 
   void _showAddDialog(BuildContext context) {
     final controller = TextEditingController();
+    final messenger = ScaffoldMessenger.of(context);
+    
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (dialogContext) => AlertDialog(
         title: const Text('添加基金代码'),
         content: TextField(
           controller: controller,
@@ -166,15 +168,17 @@ class HomePage extends StatelessWidget {
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context),
+            onPressed: () => Navigator.pop(dialogContext),
             child: const Text('取消'),
           ),
           ElevatedButton(
             onPressed: () {
               if (controller.text.isNotEmpty) {
                 final code = controller.text;
+                // 注意：这里要用 dialogContext 之外的 context 来 read provider
+                // 或者直接用 context (HomePage 的 context)
                 context.read<FundProvider>().addFund(code, onResult: (success, message) {
-                  ScaffoldMessenger.of(context).showSnackBar(
+                  messenger.showSnackBar(
                     SnackBar(
                       content: Text(message),
                       backgroundColor: success ? Colors.green : Colors.redAccent,
@@ -182,7 +186,7 @@ class HomePage extends StatelessWidget {
                     ),
                   );
                 });
-                Navigator.pop(context);
+                Navigator.pop(dialogContext);
               }
             },
             child: const Text('添加'),
@@ -396,7 +400,7 @@ class FundCard extends StatelessWidget {
                       ),
                     ),
                     Text(
-                      fund!.dwjz,
+                      fund!.displayNetValue,
                       style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
                     ),
                   ],
@@ -412,7 +416,7 @@ class FundCard extends StatelessWidget {
                       ),
                     ),
                     Text(
-                      fund!.isOfficial ? fund!.jzrq : fund!.gztime,
+                      fund!.displayTime,
                       style: const TextStyle(fontSize: 14),
                     ),
                   ],

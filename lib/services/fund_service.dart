@@ -5,6 +5,24 @@ import 'package:flutter/foundation.dart';
 import 'package:fast_gbk/fast_gbk.dart';
 import '../models/fund_model.dart';
 
+class _RawEstimate {
+  final String name;
+  final String jzrq;
+  final String dwjz;
+  final String gsz;
+  final String gszzl;
+  final String gztime;
+
+  _RawEstimate({
+    required this.name,
+    required this.jzrq,
+    required this.dwjz,
+    required this.gsz,
+    required this.gszzl,
+    required this.gztime,
+  });
+}
+
 class FundService {
   final HttpClient _httpClient = HttpClient();
 
@@ -27,86 +45,111 @@ class FundService {
     return utf8.decode(bytes, allowMalformed: true);
   }
 
+
+  Future<Map<String, dynamic>?> _fetchOfficialData(String code) async {
+    final lsjzUrl = 'https://api.fund.eastmoney.com/f10/lsjz?fundCode=$code&pageIndex=1&pageSize=1';
+    try {
+      final body = await _get(lsjzUrl, headers: {'Referer': 'https://fundf10.eastmoney.com/'}).timeout(const Duration(seconds: 3));
+      final jsonResponse = json.decode(body);
+      if (jsonResponse != null && jsonResponse['Data'] != null && jsonResponse['Data']['LSJZList'] != null) {
+        final list = jsonResponse['Data']['LSJZList'] as List;
+        if (list.isNotEmpty) {
+          return list[0] as Map<String, dynamic>;
+        }
+      }
+    } catch (e) {
+      debugPrint('Official Data Fetch Error ($code): $e');
+    }
+    return null;
+  }
+
   Future<FundEstimate?> fetchEstimate(String code, FundDataSource source) async {
     try {
+      _RawEstimate? rawEstimate;
       switch (source) {
         case FundDataSource.tiantian:
-          return await _fetchTiantian(code);
+          rawEstimate = await _fetchTiantianRaw(code);
+          break;
         case FundDataSource.sina:
-          return await _fetchSina(code);
+          rawEstimate = await _fetchSinaRaw(code);
+          break;
         case FundDataSource.tencent:
-          return await _fetchTencent(code);
+          rawEstimate = await _fetchTencentRaw(code);
+          break;
         case FundDataSource.xueqiu:
-          return await _fetchXueqiu(code);
+          rawEstimate = await _fetchXueqiuRaw(code);
+          break;
       }
+
+      // 天天基金的逻辑：对于所有数据源，都去拉取天天基金的官方净值数据进行对比和覆盖
+      final officialData = await _fetchOfficialData(code);
+
+      if (rawEstimate == null && officialData == null) return null;
+
+      final jzrqGz = rawEstimate?.jzrq ?? '';
+      final jzrqOfficial = officialData?['FSRQ']?.toString() ?? '';
+      
+      var finalJzrq = jzrqGz;
+      if (jzrqOfficial.isNotEmpty && jzrqOfficial.compareTo(finalJzrq) > 0) {
+        finalJzrq = jzrqOfficial;
+      }
+
+      String finalDwjz = rawEstimate?.dwjz ?? officialData?['DWJZ']?.toString() ?? '0.0000';
+      if (finalDwjz.isEmpty) {
+        finalDwjz = officialData?['DWJZ']?.toString() ?? '0.0000';
+      }
+      
+      String? finalLzzl;
+
+      // 如果官方日期是最新的，或者没有估算数据，则使用官方数据
+      if (jzrqOfficial.isNotEmpty && (jzrqOfficial == finalJzrq || rawEstimate == null)) {
+        finalDwjz = officialData?['DWJZ']?.toString() ?? finalDwjz;
+        finalLzzl = officialData?['JZZZL']?.toString();
+      }
+
+      return FundEstimate(
+        fundCode: code,
+        name: (rawEstimate?.name != null && rawEstimate!.name.isNotEmpty) ? rawEstimate.name : (officialData?['SHORTNAME'] ?? ''),
+        jzrq: finalJzrq,
+        dwjz: finalDwjz,
+        gsz: rawEstimate?.gsz ?? '',
+        gszzl: rawEstimate?.gszzl ?? '',
+        gztime: rawEstimate?.gztime ?? '',
+        lzzl: finalLzzl,
+      );
     } catch (e) {
       debugPrint('Error fetching fund $code from ${source.label}: $e');
     }
     return null;
   }
 
-  Future<FundEstimate?> _fetchTiantian(String code) async {
+  Future<_RawEstimate?> _fetchTiantianRaw(String code) async {
     final timestamp = DateTime.now().millisecondsSinceEpoch;
     final gzUrl = 'https://fundgz.1234567.com.cn/js/$code.js?rt=$timestamp';
-    final lsjzUrl = 'https://api.fund.eastmoney.com/f10/lsjz?fundCode=$code&pageIndex=1&pageSize=1';
-
     try {
-      final results = await Future.wait([
-        _get(gzUrl).timeout(const Duration(seconds: 3)),
-        _get(lsjzUrl, headers: {'Referer': 'https://fundf10.eastmoney.com/'}).timeout(const Duration(seconds: 3)),
-      ]);
-
-      final gzBody = results[0];
-      final lsjzBody = results[1];
-
-      Map<String, dynamic>? gzData;
-      final start = gzBody.indexOf('(') + 1;
-      final end = gzBody.lastIndexOf(')');
-      if (start > 0 && end > start) {
-        gzData = json.decode(gzBody.substring(start, end));
-      }
-
-      Map<String, dynamic>? officialData;
-      final lsjzFull = json.decode(lsjzBody);
-      if (lsjzFull != null && lsjzFull['Data'] != null && lsjzFull['Data']['LSJZList'] != null) {
-        final list = lsjzFull['Data']['LSJZList'] as List;
-        if (list.isNotEmpty) {
-          officialData = list[0] as Map<String, dynamic>;
+      final gzBody = await _get(gzUrl).timeout(const Duration(seconds: 3));
+      if (gzBody.contains('(')) {
+        final start = gzBody.indexOf('(') + 1;
+        final end = gzBody.lastIndexOf(')');
+        if (start > 0 && end > start) {
+          final gzData = json.decode(gzBody.substring(start, end));
+          return _RawEstimate(
+            name: gzData['name']?.toString() ?? '',
+            jzrq: gzData['jzrq']?.toString() ?? '',
+            dwjz: gzData['dwjz']?.toString() ?? '',
+            gsz: gzData['gsz']?.toString() ?? '',
+            gszzl: gzData['gszzl']?.toString() ?? '',
+            gztime: gzData['gztime']?.toString() ?? '',
+          );
         }
-      }
-
-      if (gzData != null) {
-        final jzrqGz = gzData['jzrq']?.toString() ?? '';
-        final jzrqOfficial = officialData?['FSRQ']?.toString() ?? '';
-        var finalJzrq = jzrqGz;
-        if (jzrqOfficial.compareTo(finalJzrq) > 0) finalJzrq = jzrqOfficial;
-
-        String finalDwjz = gzData['dwjz']?.toString() ?? '0.0000';
-        String? finalLzzl;
-
-        if (finalJzrq == jzrqOfficial && officialData != null) {
-          finalDwjz = officialData['DWJZ']?.toString() ?? finalDwjz;
-          finalLzzl = officialData['JZZZL']?.toString();
-        }
-
-        return FundEstimate(
-          fundCode: code,
-          name: gzData['name'] ?? '',
-          jzrq: finalJzrq,
-          dwjz: finalDwjz,
-          gsz: gzData['gsz']?.toString() ?? '',
-          gszzl: gzData['gszzl']?.toString() ?? '',
-          gztime: gzData['gztime']?.toString() ?? '',
-          lzzl: finalLzzl,
-        );
       }
     } catch (e) {
-      debugPrint('Tiantian Fetch Error ($code): $e');
+      debugPrint('Tiantian GZ Fetch Error ($code): $e');
     }
     return null;
   }
 
-  Future<FundEstimate?> _fetchSina(String code) async {
+  Future<_RawEstimate?> _fetchSinaRaw(String code) async {
     try {
       final timestamp = DateTime.now().millisecondsSinceEpoch;
       final url = 'https://hq.sinajs.cn/list=f_$code?_=$timestamp';
@@ -127,15 +170,13 @@ class FundService {
             growth = (dwjz - prevDwjz) / prevDwjz * 100;
           }
 
-          return FundEstimate(
-            fundCode: code,
+          return _RawEstimate(
             name: parts[0],
             jzrq: parts[4],
-            dwjz: parts[1],
+            dwjz: parts[3], // Sina provides the previous nav at index 3
             gsz: parts[1], 
             gszzl: growth.toStringAsFixed(2),
             gztime: '${parts[4]} 15:00',
-            lzzl: growth.toStringAsFixed(2),
           );
         }
       }
@@ -145,7 +186,7 @@ class FundService {
     return null;
   }
 
-  Future<FundEstimate?> _fetchTencent(String code) async {
+  Future<_RawEstimate?> _fetchTencentRaw(String code) async {
     try {
       final url = 'https://qt.gtimg.cn/q=jj$code';
       final body = await _get(url, headers: {
@@ -157,20 +198,17 @@ class FundService {
       if (start > 0 && end > start) {
         final dataStr = body.substring(start, end);
         final parts = dataStr.split('~');
-        // v_jj161725="161725~招商中证白酒指数(LOF)A~0.0000~0.0000~~0.6402~2.3563~0.4708~2026-04-24~";
         if (parts.length >= 9) {
           final rawGrowth = double.tryParse(parts[7]) ?? 0.0;
           final formattedGrowth = rawGrowth.toStringAsFixed(2);
           
-          return FundEstimate(
-            fundCode: code,
+          return _RawEstimate(
             name: parts[1],
             jzrq: parts[8],
             dwjz: parts[5],
             gsz: parts[5],
             gszzl: formattedGrowth,
             gztime: '${parts[8]} 15:00',
-            lzzl: formattedGrowth,
           );
         }
       }
@@ -180,10 +218,8 @@ class FundService {
     return null;
   }
 
-  Future<FundEstimate?> _fetchXueqiu(String code) async {
+  Future<_RawEstimate?> _fetchXueqiuRaw(String code) async {
     try {
-      // Xueqiu is currently blocking some environments. 
-      // We will try a different endpoint or handle failure gracefully.
       final url = 'https://stock.xueqiu.com/v5/stock/realtime/quotec.json?symbol=F$code';
       final body = await _get(url, headers: {
         'Referer': 'https://xueqiu.com/S/F$code',
@@ -191,22 +227,20 @@ class FundService {
       }).timeout(const Duration(seconds: 3));
 
       if (body.contains('Forbidden')) {
-        debugPrint('Xueqiu access forbidden (Blacklisted IP)');
+        debugPrint('Xueqiu access forbidden');
         return null;
       }
 
       final json = jsonDecode(body);
       if (json['data'] != null && json['data'] is List && (json['data'] as List).isNotEmpty) {
         final data = json['data'][0];
-        return FundEstimate(
-          fundCode: code,
+        return _RawEstimate(
           name: data['name'] ?? '',
           jzrq: DateTime.fromMillisecondsSinceEpoch(data['timestamp'] ?? 0).toString().split(' ')[0],
           dwjz: (data['current'] ?? 0).toString(),
           gsz: (data['current'] ?? 0).toString(),
           gszzl: (data['percent'] ?? 0).toString(),
           gztime: DateTime.fromMillisecondsSinceEpoch(data['timestamp'] ?? 0).toString(),
-          lzzl: (data['percent'] ?? 0).toString(),
         );
       }
     } catch (e) {
